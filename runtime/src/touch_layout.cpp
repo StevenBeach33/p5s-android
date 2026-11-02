@@ -81,6 +81,8 @@ struct Layout {
 const Layout kLayouts[] = {
     {"wonder", kWonder, std::size(kWonder), false, kY, 0.15f, 0.72f},
     {"p5r", kP5R, std::size(kP5R), true, 0, 0.15f, 0.76f},
+    {"p5s", kP5R, std::size(kP5R), true, 0, 0.15f, 0.76f},  // Royal's buttons until Strikers has its own
+    {"tactica", kP5R, std::size(kP5R), true, 0, 0.15f, 0.76f},  // the same buttons until it has its own
 };
 
 const Layout* layout() {

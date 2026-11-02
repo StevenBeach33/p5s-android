@@ -5,6 +5,7 @@
 #include <cctype>
 #include <algorithm>
 #include <cerrno>
+#include <atomic>
 #include <cstdio>
 #include <cstring>
 #include <filesystem>
@@ -37,6 +38,13 @@ namespace {
 bool trace_fs() {
     static const bool on = g_trace || std::getenv("NX_TRACE_FS") != nullptr;
     return on;
+}
+
+// The first opens, and the first failed ones, are always in the log (a game that stops on a file says which one): cheap,
+// and a game probing many missing files cannot flood it. NX_TRACE_FS logs all.
+bool fs_log(bool failure) {
+    static std::atomic<int> opens{60}, misses{300};
+    return trace_fs() || (failure ? misses.fetch_sub(1) > 0 : opens.fetch_sub(1) > 0);
 }
 
 // The last opens, newest last: a crash report that says what was being loaded (log_recent_files, read by the crash
@@ -409,6 +417,7 @@ void GetEntryType(CPU& c) {  // (DirectoryEntryType* out, path)
         const nxi::GameImage::Entry* e = game_image()->find(rel);
         if (e) st<uint32_t>(c.x[0], e->dir ? 0 : 1);
         else if (mod_has_dir(rel)) st<uint32_t>(c.x[0], 0), e = &kModDir;
+        if (fs_log(!e)) log("fs: GetEntryType(%s) -> %s (looked up as '%s')", cstr(c.x[1]).c_str(), e ? (e->dir ? "folder" : "file") : "not found", rel.c_str());
         c.x[0] = e ? kOk : kPathNotFound;
         return;
     }
@@ -438,7 +447,7 @@ void OpenFile(CPU& c) {  // (FileHandle* out, path, int mode: 1 read, 2 write, 4
         g_files[h] = std::make_shared<File>(f, guest);
         st<uint64_t>(c.x[0], h);
         note_open("OpenFile", guest, "virtual");
-        if (trace_fs()) log("fs: OpenFile(%s) -> virtual, %zu bytes", guest.c_str(), v->size());
+        if (fs_log(false)) log("fs: OpenFile(%s) -> virtual, %zu bytes", guest.c_str(), v->size());
         c.x[0] = kOk;
         return;
     }
@@ -457,7 +466,7 @@ void OpenFile(CPU& c) {  // (FileHandle* out, path, int mode: 1 read, 2 write, 4
         const nxi::GameImage::Entry* e = game_image()->find(rel);
         if (!e || e->dir) {
             note_open("OpenFile", guest, "not in the game file");
-            if (trace_fs()) log("fs: OpenFile(%s) not found in the game file", guest.c_str());
+            if (fs_log(true)) log("fs: OpenFile(%s) not found in the game file (looked up as '%s')", guest.c_str(), rel.c_str());
             c.x[0] = kPathNotFound;
             return;
         }
@@ -465,21 +474,21 @@ void OpenFile(CPU& c) {  // (FileHandle* out, path, int mode: 1 read, 2 write, 4
         g_files[h] = std::make_shared<File>(e, guest);
         st<uint64_t>(c.x[0], h);
         note_open("OpenFile", guest, "ok (game file)");
-        if (trace_fs()) log("fs: OpenFile(%s, %d) -> %llu (game file)", guest.c_str(), mode, (unsigned long long)h);
+        if (fs_log(false)) log("fs: OpenFile(%s, %d) -> %llu (game file, %llu bytes)", guest.c_str(), mode, (unsigned long long)h, (unsigned long long)e->size);
         c.x[0] = kOk;
         return;
     }
     std::error_code ec;
     if (p.empty() || !fs::is_regular_file(p, ec)) {
         note_open("OpenFile", guest, p.empty() ? "unknown mount" : "not found");
-        if (trace_fs()) log("fs: OpenFile(%s) not found", guest.c_str());
+        if (fs_log(true)) log("fs: OpenFile(%s) not found (host path '%s')", guest.c_str(), utf8(p).c_str());
         c.x[0] = kPathNotFound;
         return;
     }
     FILE* f = plat::fopen_utf8(utf8(p), (mode & 2) ? "r+b" : "rb");
     if (!f) {
         note_open("OpenFile", guest, "the host could not open it");
-        if (trace_fs()) log("fs: OpenFile(%s) failed to open on the host (errno %d)", guest.c_str(), errno);
+        if (fs_log(true)) log("fs: OpenFile(%s) failed to open on the host (errno %d)", guest.c_str(), errno);
         c.x[0] = kPathNotFound;
         return;
     }
@@ -487,7 +496,7 @@ void OpenFile(CPU& c) {  // (FileHandle* out, path, int mode: 1 read, 2 write, 4
     g_files[h] = std::make_shared<File>(f, guest);
     st<uint64_t>(c.x[0], h);
     note_open("OpenFile", guest, "ok");
-    if (trace_fs()) log("fs: OpenFile(%s, %d) -> %llu", guest.c_str(), mode, (unsigned long long)h);
+    if (fs_log(false)) log("fs: OpenFile(%s, %d) -> %llu", guest.c_str(), mode, (unsigned long long)h);
     c.x[0] = kOk;
 }
 
@@ -509,6 +518,7 @@ void GetFileSize(CPU& c) {  // (s64* out, FileHandle)
         return;
     }
     if (file->entry) {
+        if (fs_log(false)) log("fs: size %s = %llu (game file)", file->path.c_str(), (unsigned long long)file->entry->size);
         st<int64_t>(c.x[0], int64_t(file->entry->size));
         c.x[0] = kOk;
         return;
@@ -528,8 +538,8 @@ uint64_t read_at(const File& file, int64_t off, uint64_t buf, uint64_t size) {
     uint64_t n = file.entry ? game_image()->read(*file.entry, uint64_t(off), reinterpret_cast<void*>(buf), size)
                             : plat::read_at(file.f, off, reinterpret_cast<void*>(buf), size);
     uint64_t ms = (plat::monotonic_ns() - t0) / 1'000'000;
-    if (g_trace) log("fs: read %s at %lld size %llu -> %llu", file.path.c_str(), (long long)off, (unsigned long long)size,
-                     (unsigned long long)n);
+    if (fs_log(n != size)) log("fs: read %s at %lld size %llu -> %llu%s", file.path.c_str(), (long long)off, (unsigned long long)size,
+                               (unsigned long long)n, n != size ? "  (SHORT)" : "");
     if (trace_fs() && file.path.find(".bwav") != std::string::npos) {  // streamed audio: is it being consumed?
         static std::mutex m;
         static std::map<std::string, uint64_t> reads;
@@ -772,6 +782,7 @@ NX_HLE("_ZN2nn2fs9FlushFileENS0_10FileHandleE", FlushFile);
 NX_HLE("_ZN2nn2fs25EnableGlobalFileDataCacheEPvm", EnableGlobalFileDataCache);
 NX_HLE("_ZN2nn2fs26DisableGlobalFileDataCacheEv", DisableGlobalFileDataCache);
 NX_HLE("_ZN2nn2fs6CommitEPKc", Commit);
+NX_HLE("_ZN2nn2fs14CommitSaveDataEPKc", Commit);  // Strikers: the SDK's own would not find our "save:" mount (2-6905)
 NX_HLE("_ZN2nn2fs13OpenDirectoryEPNS0_15DirectoryHandleEPKci", OpenDirectory);
 NX_HLE("_ZN2nn2fs13ReadDirectoryEPlPNS0_14DirectoryEntryENS0_15DirectoryHandleEl", ReadDirectory);
 NX_HLE("_ZN2nn2fs14CloseDirectoryENS0_15DirectoryHandleE", CloseDirectory);
@@ -787,6 +798,111 @@ NX_HLE("_ZN2nn2fs8ReadFileEPmNS0_10FileHandleElPvmRKNS0_10ReadOptionE", ReadFile
 NX_HLE("_ZN2nn2fs18IsSaveDataExistingERKNS_7account3UidE", IsSaveDataExisting);
 NX_HLE("_ZN2nn2fs11SetFileSizeENS0_10FileHandleEl", SetFileSize);
 NX_HLE("_ZN2nn2fs26DeleteDirectoryRecursivelyEPKc", DeleteDirectoryRecursively);
+
+// ---- the SDK's own calls to nn::fs ------------------------------------------------------------------------------
+// The NX_HLE table above reaches only what `main` imports: a relocation of main names the symbol and lands on a thunk.
+// Code inside the sdk module has no relocation for its own functions, it calls them directly. The SDK's libc is such
+// code: open/fopen/stat on "rom:/..." end in nn::fs::OpenFile and friends INSIDE the sdk, which then look "rom" up in the
+// SDK's own mount table, where no one mounted it (MountRom above is ours), and fail without any IPC or log line.
+// IL2CPP's file layer opens Data/Managed/Metadata/global-metadata.dat that way ("Could not open rom:/..." and the game
+// exits, with no fs: line before it in nx.log). hook_sdk_fs patches the first instruction of those SDK functions
+// (hook_function: native execution, every call goes to the HLE function), so both callers see the same file system.
+namespace {
+
+constexpr const char* kSdkFsEntryPoints[] = {
+    "_ZN2nn2fs8OpenFileEPNS0_10FileHandleEPKci",
+    "_ZN2nn2fs9CloseFileENS0_10FileHandleE",
+    "_ZN2nn2fs11GetFileSizeEPlNS0_10FileHandleE",
+    "_ZN2nn2fs8ReadFileEPmNS0_10FileHandleElPvm",
+    "_ZN2nn2fs8ReadFileENS0_10FileHandleElPvm",
+    "_ZN2nn2fs8ReadFileEPmNS0_10FileHandleElPvmRKNS0_10ReadOptionE",
+    "_ZN2nn2fs9WriteFileENS0_10FileHandleElPKvmRKNS0_11WriteOptionE",
+    "_ZN2nn2fs9FlushFileENS0_10FileHandleE",
+    "_ZN2nn2fs11SetFileSizeENS0_10FileHandleEl",
+    "_ZN2nn2fs12GetEntryTypeEPNS0_18DirectoryEntryTypeEPKc",
+    "_ZN2nn2fs13OpenDirectoryEPNS0_15DirectoryHandleEPKci",
+    "_ZN2nn2fs13ReadDirectoryEPlPNS0_14DirectoryEntryENS0_15DirectoryHandleEl",
+    "_ZN2nn2fs14CloseDirectoryENS0_15DirectoryHandleE",
+    "_ZN2nn2fs22GetDirectoryEntryCountEPlNS0_15DirectoryHandleE",
+    "_ZN2nn2fs10CreateFileEPKcl",
+    "_ZN2nn2fs10DeleteFileEPKc",
+    "_ZN2nn2fs15CreateDirectoryEPKc",
+};
+
+// Trace-only hooks on the libc calls that open a file: the path, then the result, then the original runs. If the hooks
+// above are not enough (libc reaches the files some other way), nx.log says which call and which path. The first 80
+// calls are logged, and every "rom:" one.
+std::atomic<int> g_probe_count{0};
+
+void probe_log(const char* name, uint64_t path_ptr, bool after, uint64_t result) {
+    if (path_ptr < 0x1000) return;
+    const char* p = reinterpret_cast<const char*>(path_ptr);
+    const bool rom = std::strncmp(p, "rom:", 4) == 0;
+    if (!rom && g_probe_count.load() >= 80) return;
+    if (!after) g_probe_count.fetch_add(1);
+    if (after) log("libc: %s('%.200s') -> %lld", name, p, (long long)result);
+}
+
+#define NX_FS_PROBE(fn, path_reg)                                                      \
+    uint64_t g_orig_##fn = 0;                                                          \
+    void probe_##fn(CPU& c) {                                                          \
+        const uint64_t path = c.x[path_reg];                                           \
+        probe_log(#fn, path, false, 0);                                                \
+        if (g_orig_##fn) call(c, g_orig_##fn);                                         \
+        else c.x[0] = uint64_t(-1);                                                    \
+        probe_log(#fn, path, true, c.x[0]);                                            \
+    }
+NX_FS_PROBE(open, 0)
+NX_FS_PROBE(open64, 0)
+NX_FS_PROBE(openat, 1)
+NX_FS_PROBE(fopen, 0)
+NX_FS_PROBE(fopen64, 0)
+NX_FS_PROBE(stat, 0)
+NX_FS_PROBE(stat64, 0)
+NX_FS_PROBE(access, 0)
+#undef NX_FS_PROBE
+
+}  // namespace
+
+void hook_sdk_fs() {
+    if (const char* off = std::getenv("NX_SDK_FS_HOOKS"); off && off[0] == '0') {
+        log("fs: the SDK's own nn::fs calls are not hooked (NX_SDK_FS_HOOKS=0)");
+        return;
+    }
+    int hooked = 0, missing = 0;
+    for (const char* sym : kSdkFsEntryPoints) {
+        const HleFn fn = hle_lookup(sym);
+        const uint64_t addr = find_symbol(sym);
+        if (!fn || !addr || !module_at(addr)) {
+            missing++;  // this SDK does not have that overload
+            continue;
+        }
+        if (hook_function(addr, fn)) hooked++;
+        else log("fs: %s in the sdk could not be hooked (see the nce line above)", sym);
+    }
+    log("fs: %d of the SDK's own nn::fs entry points go to the HLE now (%d not in this SDK)", hooked, missing);
+
+    int probes = 0;
+    std::vector<uint64_t> probed;  // open64 and open may be one function: it is hooked once
+#define NX_FS_PROBE_INSTALL(fn)                                                                        \
+    if (uint64_t a = find_symbol(#fn); a && module_at(a) && std::find(probed.begin(), probed.end(), a) == probed.end()) { \
+        probed.push_back(a);                                                                           \
+        if (uint64_t orig = hook_function(a, probe_##fn)) {                                            \
+            g_orig_##fn = orig;                                                                        \
+            probes++;                                                                                  \
+        }                                                                                              \
+    }
+    NX_FS_PROBE_INSTALL(open)
+    NX_FS_PROBE_INSTALL(open64)
+    NX_FS_PROBE_INSTALL(openat)
+    NX_FS_PROBE_INSTALL(fopen)
+    NX_FS_PROBE_INSTALL(fopen64)
+    NX_FS_PROBE_INSTALL(stat)
+    NX_FS_PROBE_INSTALL(stat64)
+    NX_FS_PROBE_INSTALL(access)
+#undef NX_FS_PROBE_INSTALL
+    log("fs: %d libc file calls are traced in the log", probes);
+}
 
 void log_recent_files() {
     std::unique_lock lk(g_recent_lock, std::try_to_lock);

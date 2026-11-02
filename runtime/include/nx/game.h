@@ -9,11 +9,11 @@ namespace nx::game {
 struct Info {
     const char* id;               // lowercase: CMake target, library, executable, log tag ("hades")
     const char* title;            // for the player: window title, Android data folder ("Hades")
-    uint64_t program_id;          // svcGetInfo(ProgramId)
+    uint64_t program_id;          // svcGetInfo(ProgramId). 0: the title ID of the player's game file (game_image.h)
     const char* android_package;  // the APK's package (games/<game>/AndroidManifest.xml)
     const char* pc_data_root;     // PC: where analysis/ and extract/ are ("private/<game>")
     // main.npdm META +0x14. Non-zero enables nn::os virtual address memory (VammManager, SDK 16) over the alias
-    // region; svcGetInfo(SystemResourceSizeTotal) reports it.
+    // region; svcGetInfo(SystemResourceSizeTotal) reports it. All ones: read it from the game file's main.npdm.
     uint64_t system_resource_size = 0;
     // Native execution (NX_NCE): the start of the build ID (hex) the game's glue is made for, checked against the
     // player's exefs/main (the hooks and offsets in game.cpp are those of one version). Null: any.

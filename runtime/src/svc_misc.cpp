@@ -1,7 +1,18 @@
 // Small services that only need to answer "yes, fine": parental controls, add-on content, logging, power.
+<<<<<<< HEAD
 #include <algorithm>
 #include <cstdlib>
 #include <cstring>
+=======
+#include <atomic>
+#include <algorithm>
+#include <cstdlib>
+#include <cstring>
+#include <string>
+
+#include <nx/runtime.h>
+
+>>>>>>> 8b93a28 (beta)
 #include "ipc.h"
 #include <nx/cpu.h>
 #include <nx/runtime.h>
@@ -33,9 +44,65 @@ ServiceRegistrar r_pctl_s("pctl:s", [] { return make("pctl:s", pctl); });
 ServiceRegistrar r_pctl_a("pctl:a", [] { return make("pctl:a", pctl); });
 ServiceRegistrar r_pctl_r("pctl:r", [] { return make("pctl:r", pctl); });
 
+// ILogger::Log: the game's own log, which usually says why it stops. A packet is a 24-byte header (process id, thread id,
+// flags, padding, severity, verbosity, payload size), then chunks of (key, size, data) with LEB128 key and size:
+// 2 text, 3 line number, 4 file, 5 function, 6 module. Long messages come in several packets; each is printed as it is.
+void log_packet(const uint8_t* p, size_t n) {
+    static std::atomic<int> shown{0};
+    if (n < 24) return;
+    const uint32_t payload = uint32_t(p[20]) | uint32_t(p[21]) << 8 | uint32_t(p[22]) << 16 | uint32_t(p[23]) << 24;
+    const size_t end = std::min<size_t>(n, 24 + size_t(payload));
+    std::string text, file, func, module;
+    uint32_t line = 0;
+    auto leb = [&](size_t& o, uint64_t& v) {
+        v = 0;
+        for (int shift = 0; shift < 63 && o < end; shift += 7) {
+            uint8_t b = p[o++];
+            v |= uint64_t(b & 0x7f) << shift;
+            if (!(b & 0x80)) return true;
+        }
+        return false;
+    };
+    for (size_t o = 24; o < end;) {
+        uint64_t key, size;
+        if (!leb(o, key) || !leb(o, size) || size > end - o) break;
+        const char* d = reinterpret_cast<const char*>(p) + o;
+        switch (key) {
+            case 2: text.append(d, size_t(size)); break;
+            case 3: if (size >= 4) std::memcpy(&line, d, 4); break;
+            case 4: file.assign(d, size_t(size)); break;
+            case 5: func.assign(d, size_t(size)); break;
+            case 6: module.assign(d, size_t(size)); break;
+            default: break;
+        }
+        o += size_t(size);
+    }
+    if (text.empty()) return;
+    const int k = shown.fetch_add(1);
+    if (k >= 500) {
+        if (k == 500) log("lm: more game log messages are not shown");
+        return;
+    }
+    for (char& ch : text)
+        if (ch != '\n' && (static_cast<unsigned char>(ch) < 0x20 || static_cast<unsigned char>(ch) == 0x7f)) ch = '?';
+    while (!text.empty() && (text.back() == '\n' || text.back() == ' ')) text.pop_back();
+    log("lm: severity %u [%s] %s:%u %s | %s", unsigned(p[18]), module.c_str(), file.c_str(), line, func.c_str(),
+        text.c_str());
+}
+
 ServiceRegistrar r_lm("lm", [] {
     return make("lm", [](Service& s) {
-        s.cmds[0] = [](IpcCtx& c) { c.push_object(make("ILogger")); return 0u; };  // OpenLogger
+        s.cmds[0] = [](IpcCtx& c) {  // OpenLogger
+            c.push_object(make("ILogger", [](Service& l) {
+                l.cmds[0] = [](IpcCtx& c2) {  // Log
+                    Buffer in = c2.in_buf(0);
+                    if (in.addr && in.size) log_packet(reinterpret_cast<const uint8_t*>(in.addr), size_t(in.size));
+                    return 0u;
+                };
+                l.cmds[1] = [](IpcCtx&) { return 0u; };  // SetDestination
+            }));
+            return 0u;
+        };
     });
 });
 

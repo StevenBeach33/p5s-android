@@ -31,17 +31,22 @@ if ($Release) { cmake -B $build -DNX_RELEASE=ON | Out-Null }
 # shader translator (libspirvharness.so, built in Docker by games/p5r/tools/build_harness_android.sh).
 $extraLibs = @()
 $targets = @($Game)
-if ($Nce -and $Game -eq "p5r") {
+if ($Nce -and ($Game -eq "p5r" -or $Game -eq "tactica" -or $Game -eq "p5s")) {
     $harness = "$root\private\build\spirv_harness_android\libspirvharness.so"
     if (-not (Test-Path $harness)) {
         throw "missing $harness. Build it once, with Docker Desktop running, from the repository root: docker run --rm -v ""${root}:/src"" -w /src mcr.microsoft.com/dotnet/sdk:10.0 sh games/p5r/tools/build_harness_android.sh"
     }
+<<<<<<< HEAD
     $targets += "p5rimport"
     $extraLibs += @("$build\libp5rimport.so", $harness)
     # libadrenotools' hook libraries (custom GPU drivers): loaded by name from nativeLibraryDir at run time.
     foreach ($h in @("libhook_impl.so", "libmain_hook.so", "libfile_redirect_hook.so", "libgsl_alloc_hook.so")) {
         $extraLibs += "$build\adrenotools\src\hook\$h"
     }
+=======
+    $targets += "${Game}import"
+    $extraLibs += @("$build\lib${Game}import.so", $harness)
+>>>>>>> 8b93a28 (beta)
 }
 cmake --build $build --target @targets
 if ($LASTEXITCODE) { throw "native build failed" }

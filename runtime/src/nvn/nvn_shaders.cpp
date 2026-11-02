@@ -263,6 +263,10 @@ const ShaderInfo* shader_for(uint64_t code_host, uint64_t control) {
             log("nvn: %zu shader records from %sresults.tsv", parse_results_tsv(text, k.resources), dir.c_str());
         else
             log("nvn: no %sresults.tsv: storage buffers of translated shaders cannot be bound", dir.c_str());
+        // shaders the offline inventory missed, translated afterwards from <data root>/shader_misses (same format)
+        if (read_whole(dir + "results_extra.tsv", text))
+            log("nvn: %zu more shader records from %sresults_extra.tsv", parse_results_tsv(text, k.resources),
+                dir.c_str());
     }
     std::unique_ptr<ShaderInfo>& slot = k.by_hash[hash];
     std::string bytes;

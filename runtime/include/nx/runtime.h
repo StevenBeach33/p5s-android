@@ -139,5 +139,8 @@ std::string read_game_file(const std::string& relative_to_romfs);
 // The last file and directory opens of every thread (a small ring, always on), logged by the crash handlers: what
 // the game was loading when it crashed (hle_fs.cpp).
 void log_recent_files();
+// Native execution: sends the SDK's own calls to nn::fs (its libc's open/fopen/stat on "rom:/...") to the same HLE the
+// game's imports use, and traces the libc open calls in the log. A game calls it from game::after_init() (hle_fs.cpp).
+void hook_sdk_fs();
 
 }  // namespace nx

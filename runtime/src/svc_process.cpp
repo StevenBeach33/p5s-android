@@ -7,9 +7,31 @@
 #include <nx/game.h>
 #include <nx/runtime.h>
 
+#include "game_image.h"
 #include "kernel.h"
 
 namespace nx {
+
+namespace {
+
+// A game that leaves these open (nx/game.h) gets them from the player's game file.
+uint64_t program_id() {
+    if (game::kInfo.program_id) return game::kInfo.program_id;
+    const nxi::GameImage* image = game_image();
+    return image ? image->title_id() : 0;
+}
+
+uint64_t system_resource_size() {
+    if (game::kInfo.system_resource_size != ~0ull) return game::kInfo.system_resource_size;
+    const nxi::GameImage* image = game_image();
+    if (!image) return 0;
+    auto it = image->exefs().find("main.npdm");  // META: the magic, the system resource size at +0x14
+    if (it == image->exefs().end() || it->second.size() < 0x18 || std::memcmp(it->second.data(), "META", 4) != 0) return 0;
+    const uint8_t* p = it->second.data() + 0x14;
+    return uint64_t(p[0]) | uint64_t(p[1]) << 8 | uint64_t(p[2]) << 16 | uint64_t(p[3]) << 24;
+}
+
+}  // namespace
 
 // ---- svcGetInfo -------------------------------------------------------------------------------------------------
 
@@ -33,9 +55,9 @@ uint64_t get_info(uint32_t type, uint32_t handle, uint64_t sub, uint32_t& rc) {
         case 13: return kAddressSpaceSize;
         case 14: return kStackBase;
         case 15: return kStackSize;
-        case 16: return game::kInfo.system_resource_size;  // SystemResourceSizeTotal
+        case 16: return system_resource_size();  // SystemResourceSizeTotal
         case 17: return 0;
-        case 18: return game::kInfo.program_id;  // ProgramId
+        case 18: return program_id();  // ProgramId
         case 20: {  // UserExceptionContextAddress: a page of ours (SDK 16 keeps its dying-message region at +0x1C0)
             static uint64_t ctx = kernel_alloc(0x1000);
             return ctx;

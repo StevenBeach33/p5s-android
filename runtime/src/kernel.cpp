@@ -477,6 +477,7 @@ static void svc_impl(CPU& c, uint32_t imm, uint64_t pc) {
         }
         case 0x07:
             log("svcExitProcess");
+            backtrace(c);  // who asked: the game's own abort path, with the log messages above it
             plat::exit_process(0);
         case 0x08: {  // CreateThread(entry x1, arg x2, stack_top x3, prio w4, core w5) -> handle
             auto t = new_thread(c.x[1], c.x[2], c.x[3], int(c.x[4]), int32_t(c.x[5]));

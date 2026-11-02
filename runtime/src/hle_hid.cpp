@@ -202,6 +202,13 @@ void ShowControllerSupport(CPU& c) {                     // (ControllerSupportRe
 }
 void noop(CPU& c) { c.x[0] = 0; }
 
+// Strikers: a joy-con style state is never connected (only the full-key pad is): sampling number, nothing else.
+void GetNpadStateNotConnected(CPU& c) {
+    std::memset(reinterpret_cast<void*>(c.x[0]), 0, 0x28);
+    st<int64_t>(c.x[0], int64_t(g_sampling));
+}
+void GetSupportedNpadStyleSet(CPU& c) { c.x[0] = kStyleFullKey; }
+
 // TouchScreenState<N>: {int64 samplingNumber; int32 count; int32 reserved; TouchState touches[N]}. No touches.
 void GetTouchScreenState(CPU& c) {
     st<int64_t>(c.x[0], int64_t(g_sampling));
@@ -317,6 +324,12 @@ NX_HLE("_ZN2nn3hid23GetSixAxisSensorHandlesEPNS0_19SixAxisSensorHandleEiRKjNS_4u
 NX_HLE("_ZN2nn3hid18StartSixAxisSensorERKNS0_19SixAxisSensorHandleE", noop);
 NX_HLE("_ZN2nn3hid22GetSixAxisSensorStatesEPNS0_18SixAxisSensorStateEiRKNS0_19SixAxisSensorHandleE", GetSixAxisSensorStates);
 // SDK 13 (Persona 5 Royal)
+NX_HLE("_ZN2nn3hid19GetTouchScreenStateILm1EEEvPNS0_16TouchScreenStateIXT_EEE", GetTouchScreenState);
+NX_HLE("_ZN2nn3hid12GetNpadStateEPNS0_16NpadJoyLeftStateERKj", GetNpadStateNotConnected);
+NX_HLE("_ZN2nn3hid12GetNpadStateEPNS0_17NpadJoyRightStateERKj", GetNpadStateNotConnected);
+NX_HLE("_ZN2nn3hid18GetNpadJoyHoldTypeEv", zero);
+NX_HLE("_ZN2nn3hid29SetNpadHandheldActivationModeENS0_26NpadHandheldActivationModeE", noop);
+NX_HLE("_ZN2nn3hid24GetSupportedNpadStyleSetEv", GetSupportedNpadStyleSet);
 NX_HLE("_ZN2nn3hid21InitializeTouchScreenEv", noop);
 NX_HLE("_ZN2nn3hid19GetTouchScreenStateILm16EEEvPNS0_16TouchScreenStateIXT_EEE", GetTouchScreenState);
 NX_HLE("_ZN2nn3hid21GetSixAxisSensorStateEPNS0_18SixAxisSensorStateERKNS0_19SixAxisSensorHandleE", GetSixAxisSensorState);

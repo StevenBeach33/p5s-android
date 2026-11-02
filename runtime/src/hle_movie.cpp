@@ -118,6 +118,45 @@ void BufferSetRange(CPU& c) {  // (int offset, int size)
 void BufferBase(CPU& c) { c.x[0] = ld<uint64_t>(c.x[0] + kBufBase); }
 void BufferCapacity(CPU& c) { c.x[0] = ld<uint64_t>(c.x[0] + kBufCapacity); }
 
+
+constexpr uint32_t kTryAgainStatus = 0x1001;
+// ---- Strikers: Buffer accessors, MediaData::SetInt32/FindString, and movie::Extractor ----------------------------------
+
+void BufferSize(CPU& c) { c.x[0] = uint64_t(uint32_t(ld<int32_t>(c.x[0] + kBufSize))); }
+void BufferOffset(CPU& c) { c.x[0] = uint64_t(uint32_t(ld<int32_t>(c.x[0] + kBufOffset))); }
+void BufferSetNvn(CPU&) {}  // SetNvnDev(void*) / SetNvnSync(void*): the decoder's GPU sharing, not used here
+// void SetInt32(const char* key, int32_t value)
+void MediaDataSetInt32(CPU& c) { md_set(c.x[0], reinterpret_cast<const char*>(c.x[1]), int32_t(c.x[2])); }
+// bool FindString(const char* key, const char** out) const (nothing stores a string, so: not found)
+void MediaDataFindString(CPU& c) {
+    MediaMap* m = media(c.x[0]);
+    auto it = m ? m->find(reinterpret_cast<const char*>(c.x[1])) : MediaMap::iterator{};
+    bool found = m && it != m->end() && !it->second.s.empty();
+    if (found && c.x[2]) st<uint64_t>(c.x[2], reinterpret_cast<uint64_t>(it->second.s.c_str()));
+    c.x[0] = found;
+}
+
+// movie::Extractor(ContainerType): the container reader (WebM for Strikers' videos) is not implemented. The object gets
+// a vtable whose every function fails (the two destructors succeed), so the game's player reports an error for the
+// video and goes on, instead of calling a null function. The slots seen in main (b86460 and b872e0): +0x10 open with a
+// data source, +0x20 track count, +0x60 duration; a real reader is the next step once a log shows which videos matter.
+void ExtractorCtor(CPU& c) {
+    static uint64_t vtable[32];
+    static std::once_flag once;
+    std::call_once(once, [] {
+        for (int k = 0; k < 32; k++) vtable[k] = hle_address(k < 2 ? "movie::Extractor::dtor" : "movie::Extractor::fail");
+    });
+    log("movie: Extractor(container type %u) at %llx: not implemented, every call fails", unsigned(c.x[1]),
+        (unsigned long long)c.x[0]);
+    st<uint64_t>(c.x[0], reinterpret_cast<uint64_t>(vtable));
+}
+void ExtractorFail(CPU& c) {
+    static std::atomic<int> n{0};
+    if (n++ < 20) log("movie: Extractor call (slot not implemented) fails, x0=%llx", (unsigned long long)c.x[0]);
+    c.x[0] = kTryAgainStatus;
+}
+void ExtractorDtor(CPU& c) { c.x[0] = 0; }
+
 // ---- Decoder -----------------------------------------------------------------------------------------------------
 
 enum Event { kInputAvailable, kOutputAvailable, kFormatChanged, kError };
@@ -843,6 +882,15 @@ NX_HLE("_ZN5movie6Buffer18SetDataAndCapacityEPvm", BufferSetDataAndCapacity);
 NX_HLE("_ZN5movie6Buffer8SetRangeEii", BufferSetRange);
 NX_HLE("_ZNK5movie6Buffer4BaseEv", BufferBase);
 NX_HLE("_ZNK5movie6Buffer8CapacityEv", BufferCapacity);
+NX_HLE("_ZNK5movie6Buffer4SizeEv", BufferSize);
+NX_HLE("_ZNK5movie6Buffer6OffsetEv", BufferOffset);
+NX_HLE("_ZN5movie6Buffer9SetNvnDevEPv", BufferSetNvn);
+NX_HLE("_ZN5movie6Buffer10SetNvnSyncEPv", BufferSetNvn);
+NX_HLE("_ZN5movie9MediaData8SetInt32EPKci", MediaDataSetInt32);
+NX_HLE("_ZNK5movie9MediaData10FindStringEPKcPS2_", MediaDataFindString);
+NX_HLE("_ZN5movie9ExtractorC1ENS_13ContainerTypeE", ExtractorCtor);
+NX_HLE("movie::Extractor::dtor", ExtractorDtor);
+NX_HLE("movie::Extractor::fail", ExtractorFail);
 NX_HLE("_ZN5movie7DecoderC1ENS_11DecoderTypeENS_19DecoderOutputFormatENS_11DecoderModeEi", DecoderCtor);
 // The vtable's entries (kVtable), in its order: subsdk0's _ZTVN5movie7DecoderE.
 NX_HLE("movie::Decoder::~Decoder", DecoderDtor);

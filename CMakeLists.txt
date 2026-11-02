@@ -279,6 +279,24 @@ if(ANDROID AND NX_GAME STREQUAL "p5r")
     target_link_libraries(p5rimport PRIVATE log dl)
     target_link_options(p5rimport PRIVATE -Wl,-z,max-page-size=16384)
 endif()
+# Tactica's import on the phone (games/tactica/import, ImportActivity): the same, for Unity's shaders.
+if(ANDROID AND NX_GAME STREQUAL "tactica")
+    add_library(tacticaimport SHARED games/tactica/import/tactica_import_jni.cpp games/tactica/import/tactica_shaders.cpp
+        games/tactica/import/tactica_image.cpp "${NX_IMPORTER_DIR}/nximport.cpp" "${NX_IMPORTER_DIR}/nxcrypto.cpp")
+    target_include_directories(tacticaimport PRIVATE "${NX_IMPORTER_DIR}" games/tactica/import)
+    target_compile_options(tacticaimport PRIVATE -O2 -fvisibility=hidden -march=armv8-a+crypto)
+    target_link_libraries(tacticaimport PRIVATE log dl)
+    target_link_options(tacticaimport PRIVATE -Wl,-z,max-page-size=16384)
+endif()
+# Strikers' import on the phone (games/p5s/import, ImportActivity): the same, for Unity's shaders.
+if(ANDROID AND NX_GAME STREQUAL "p5s")
+    add_library(p5simport SHARED games/p5s/import/p5s_import_jni.cpp games/p5s/import/p5s_shaders.cpp
+        games/p5s/import/p5s_image.cpp "${NX_IMPORTER_DIR}/nximport.cpp" "${NX_IMPORTER_DIR}/nxcrypto.cpp")
+    target_include_directories(p5simport PRIVATE "${NX_IMPORTER_DIR}" games/p5s/import)
+    target_compile_options(p5simport PRIVATE -O2 -fvisibility=hidden -march=armv8-a+crypto)
+    target_link_libraries(p5simport PRIVATE log dl z)
+    target_link_options(p5simport PRIVATE -Wl,-z,max-page-size=16384)
+endif()
 
 # NX_RELEASE: the runtime and the game's glue only (the recompiled game code does not change with it).
 if(NX_RELEASE)
